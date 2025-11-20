@@ -4,11 +4,11 @@ import ssl
 class URL:
     def __init__(self, url: str):
         self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https"], "Only http and https schemes are supported"
-        if self.scheme == "http":
-            self.port = 80
-        else:
-            self.port = 443
+        assert self.scheme in ["http", "https", "file"], "Unsupported URL scheme"
+        if self.scheme == "file":
+            self.path = url
+            return
+        self.port = 80 if self.scheme == "http" else 443
         if "/" not in url:
             self.host = url
             self.path = "/"
@@ -20,6 +20,9 @@ class URL:
             self.port = int(port)
 
     def request(self):
+        if self.scheme == "file":
+            with open(self.path, "r") as f:
+                return f.read()
         s = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
         s.connect((self.host, self.port))
         if self.scheme == "https":
@@ -63,4 +66,5 @@ def load(url: URL):
 
 if __name__ == "__main__":
     import sys
-    load(URL(sys.argv[1]))
+    import os
+    load(URL(sys.argv[1] if len(sys.argv) > 1 else "file://" + os.path.join(os.path.dirname(__file__), "example.html")))
