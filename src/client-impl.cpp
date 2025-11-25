@@ -33,8 +33,7 @@ auto parseNetworkUrl(const std::string& scheme, std::string_view url)
 
     std::string_view host;
     std::string_view path;
-    auto endOfHost = url.find('/');
-    if (endOfHost == std::string_view::npos)
+    if (auto endOfHost = url.find('/'); endOfHost == std::string_view::npos)
     {
         host = url;
         path = "/"sv;
