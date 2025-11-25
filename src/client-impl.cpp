@@ -9,6 +9,7 @@ module;
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <variant>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
@@ -26,6 +27,50 @@ constexpr auto HttpScheme = "http"sv;
 constexpr auto HttpsScheme = "https"sv;
 constexpr auto FileScheme = "file"sv;
 
+auto parseNetworkUrl(const std::string& scheme, std::string_view url)
+{
+    auto port = scheme == HttpScheme ? "443"sv : "80"sv;
+
+    std::string_view host;
+    std::string_view path;
+    auto endOfHost = url.find('/');
+    if (endOfHost == std::string_view::npos)
+    {
+        host = url;
+        path = "/"sv;
+    }
+    else
+    {
+        host = url.substr(0, endOfHost);
+        path = url.substr(endOfHost);
+    }
+
+    if (auto portSeparator = host.find(':'); portSeparator != std::string_view::npos)
+    {
+        if (portSeparator + 1 < host.length())
+        {
+            port = host.substr(portSeparator + 1);
+        }
+        host.remove_suffix(host.length() - portSeparator);
+    }
+
+    if (host.empty())
+    {
+        throw std::invalid_argument("Client: URL must have a host");
+    }
+
+    return NetworkUrlData{.m_host{host}, .m_port{port}, .m_path{path}};
+}
+
+auto parseFileUrl(std::string_view url)
+{
+    if (url.empty())
+    {
+        throw std::invalid_argument("Client: 'file' URL must have a path");
+    }
+    return FileUrlData{.m_path{url}};
+}
+
 Client::Client(std::string_view url)
 {
     auto endOfScheme = url.find(SchemeSeperator);
@@ -35,58 +80,32 @@ Client::Client(std::string_view url)
     }
     m_scheme = url.substr(0, endOfScheme);
     url.remove_prefix(endOfScheme + SchemeSeperator.length());
-    if (m_scheme == FileScheme)
+    if (m_scheme == HttpScheme || m_scheme == HttpsScheme)
     {
-        m_path = url;
-        if (m_path.empty())
-        {
-            throw std::invalid_argument("Client: 'file' URL must have a path");
-        }
-        return;
+        m_data = parseNetworkUrl(m_scheme, url);
     }
-
-    if (m_scheme == HttpScheme)
+    else if (m_scheme == FileScheme)
     {
-        m_port = "80"sv;
-    }
-    else if (m_scheme == HttpsScheme)
-    {
-        m_port = "443"sv;
+        m_data = parseFileUrl(url);
     }
     else
     {
         throw std::invalid_argument(std::format("Client: Unsupported URL scheme: \"{}\"", m_scheme));
     }
+}
 
-    auto endOfHost = url.find('/');
-    if (endOfHost == std::string_view::npos)
+auto loadFile(const FileUrlData& data)
+{
+    std::filebuf file;
+    if (!file.open(data.m_path, std::ios::in))
     {
-        m_host = url;
-        m_path = "/"sv;
+        throw std::runtime_error(std::format("Client: failed to open file \"{}\"", data.m_path));
     }
-    else
-    {
-        m_host = url.substr(0, endOfHost);
-        m_path = url.substr(endOfHost);
-    }
-
-    if (auto portSeparator = m_host.find(':'); portSeparator != std::string_view::npos)
-    {
-        if (portSeparator + 1 < m_host.length())
-        {
-            m_port.assign(m_host, portSeparator + 1);
-        }
-        m_host.erase(portSeparator);
-    }
-
-    if (m_host.empty())
-    {
-        throw std::invalid_argument("Client: URL must have a host");
-    }
+    return std::string(std::istreambuf_iterator(&file), {});
 }
 
 template <typename Socket>
-std::string httpLoad(Socket& socket, const std::string& host, const std::string& path)
+auto httpLoad(Socket& socket, const NetworkUrlData& data)
 {
     asio::streambuf request;
     std::format_to(std::ostreambuf_iterator(&request),
@@ -95,7 +114,7 @@ std::string httpLoad(Socket& socket, const std::string& host, const std::string&
                    "Connection: close\r\n"
                    "User-Agent: web-browser-engineering\r\n"
                    "\r\n",
-                   path, host);
+                   data.m_path, data.m_host);
     asio::write(socket, request);
 
     asio::streambuf response;
@@ -132,31 +151,31 @@ std::string httpLoad(Socket& socket, const std::string& host, const std::string&
     return content;
 }
 
-std::string Client::load() const
+auto loadFromNetwork(const std::string& scheme, const NetworkUrlData& data)
 {
-    if (m_scheme == FileScheme)
-    {
-        std::filebuf file;
-        if (!file.open(m_path, std::ios::in))
-        {
-            throw std::runtime_error(std::format("Client: failed to open file \"{}\"", m_path));
-        }
-        return std::string(std::istreambuf_iterator(&file), {});
-    }
-
     asio::io_context ioContext;
     tcp::resolver resolver(ioContext);
     tcp::socket socket(ioContext);
 
-    asio::connect(socket, resolver.resolve(m_host, m_port));
+    asio::connect(socket, resolver.resolve(data.m_host, data.m_port));
 
-    if (m_scheme == HttpsScheme)
+    if (scheme == HttpsScheme)
     {
         asio::ssl::context sslContext(asio::ssl::context::sslv23);
         asio::ssl::stream<tcp::socket&> sslSocket(socket, sslContext);
         sslSocket.handshake(asio::ssl::stream_base::client);
-        return httpLoad(sslSocket, m_host, m_path);
+        return httpLoad(sslSocket, data);
     }
 
-    return httpLoad(socket, m_host, m_path);
+    return httpLoad(socket, data);
+}
+
+std::string Client::load() const
+{
+    if (m_scheme == FileScheme)
+    {
+        return loadFile(std::get<FileUrlData>(m_data));
+    }
+
+    return loadFromNetwork(m_scheme, std::get<NetworkUrlData>(m_data));
 }
