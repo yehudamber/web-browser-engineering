@@ -10,7 +10,7 @@ using namespace std::literals;
 
 int main(int argc, char** argv) try
 {
-    static constexpr auto defaultUrl = "file://"sv DEFAULT_FILE;
+    static constexpr auto defaultUrl = "file://" RESOURCE_DIR "/example.html"sv;
     Client client(argc > 1 ? argv[1] : defaultUrl);
     display(client.load());
 }
