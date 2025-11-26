@@ -26,6 +26,7 @@ using asio::ip::tcp;
 constexpr auto HttpScheme = "http"sv;
 constexpr auto HttpsScheme = "https"sv;
 constexpr auto FileScheme = "file"sv;
+constexpr auto DataScheme = "data"sv;
 
 auto parseNetworkUrl(const std::string& scheme, std::string_view url)
 {
@@ -83,6 +84,20 @@ auto parseFileUrl(std::string_view url)
     return FileUrlData{.m_path{url}};
 }
 
+auto parseDataUrl(std::string_view url)
+{
+    auto endOfType = url.find(',');
+    if (endOfType == std::string_view::npos)
+    {
+        throw std::invalid_argument("Client: 'data' URL must have a comma before its content");
+    }
+    if (endOfType + 1 == url.length())
+    {
+        throw std::invalid_argument("Client: 'data' URL must have a content");
+    }
+    return DataUrlData{.m_type{url.substr(0, endOfType)}, .m_content{url.substr(endOfType + 1)}};
+}
+
 Client::Client(std::string_view url)
 {
     auto endOfScheme = url.find(':');
@@ -99,6 +114,10 @@ Client::Client(std::string_view url)
     else if (m_scheme == FileScheme)
     {
         m_data = parseFileUrl(url);
+    }
+    else if (m_scheme == DataScheme)
+    {
+        m_data = parseDataUrl(url);
     }
     else
     {
@@ -187,6 +206,10 @@ std::string Client::load() const
     if (m_scheme == FileScheme)
     {
         return loadFile(std::get<FileUrlData>(m_data));
+    }
+    if (m_scheme == DataScheme)
+    {
+        return std::get<DataUrlData>(m_data).m_content;
     }
 
     return loadFromNetwork(m_scheme, std::get<NetworkUrlData>(m_data));
