@@ -1,5 +1,6 @@
 module;
 
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <istream>
@@ -22,14 +23,17 @@ using namespace std::literals;
 namespace asio = boost::asio;
 using asio::ip::tcp;
 
-constexpr auto SchemeSeperator = "://"sv;
 constexpr auto HttpScheme = "http"sv;
 constexpr auto HttpsScheme = "https"sv;
 constexpr auto FileScheme = "file"sv;
 
 auto parseNetworkUrl(const std::string& scheme, std::string_view url)
 {
-    auto port = scheme == HttpScheme ? "443"sv : "80"sv;
+    if (url.length() < 2 || url[0] != '/' || url[1] != '/')
+    {
+        throw std::invalid_argument("Client: Network URL must begin with '<scheme>://'");
+    }
+    url.remove_prefix(2);
 
     std::string_view host;
     std::string_view path;
@@ -44,6 +48,7 @@ auto parseNetworkUrl(const std::string& scheme, std::string_view url)
         path = url.substr(endOfHost);
     }
 
+    auto port = scheme == HttpScheme ? "443"sv : "80"sv;
     if (auto portSeparator = host.find(':'); portSeparator != std::string_view::npos)
     {
         if (portSeparator + 1 < host.length())
@@ -63,22 +68,30 @@ auto parseNetworkUrl(const std::string& scheme, std::string_view url)
 
 auto parseFileUrl(std::string_view url)
 {
+    if (url.length() >= 2 && url[0] == '/' && url[1] == '/')
+    {
+        url.remove_prefix(2);
+    }
     if (url.empty())
     {
         throw std::invalid_argument("Client: 'file' URL must have a path");
+    }
+    if (std::filesystem::path(url).is_relative())
+    {
+        throw std::invalid_argument("Client: 'file' URL path must be absolute");
     }
     return FileUrlData{.m_path{url}};
 }
 
 Client::Client(std::string_view url)
 {
-    auto endOfScheme = url.find(SchemeSeperator);
+    auto endOfScheme = url.find(':');
     if (endOfScheme == std::string_view::npos)
     {
         throw std::invalid_argument("Client: URL must have a scheme");
     }
     m_scheme = url.substr(0, endOfScheme);
-    url.remove_prefix(endOfScheme + SchemeSeperator.length());
+    url.remove_prefix(endOfScheme + 1);
     if (m_scheme == HttpScheme || m_scheme == HttpsScheme)
     {
         m_data = parseNetworkUrl(m_scheme, url);
